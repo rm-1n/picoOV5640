@@ -1,17 +1,17 @@
 #include "hardware/i2c.h"
 
 // settings (pins & i2c)
-#define CAM1_MCLK_GPIO 21 // also known as "XCLK - check clock_gpio_init for compatibility
-#define CAM1_PWD_GPIO 4
-#define CAM1_RST_GPIO 5
-#define CAM1_SDA_GPIO 2
-#define CAM1_SCL_GPIO 3
-#define CAM1_I2C i2c1 // or i2c0 depending on SDA/SCL bindings
+#define CAM_MCLK_GPIO 20
+#define CAM_PWD_GPIO 26
+#define CAM_RST_GPIO 22
+#define CAM_SDA_GPIO 8
+#define CAM_SCL_GPIO 9
+#define CAM_I2C i2c0
 
-#define CAM1_DATA_GPIO 6 // first data pin connection (labelled D2 on OV5640 module)
-#define CAM1_PCLK_GPIO 14 // pixel clock
-#define CAM1_VSYNC_GPIO 17
-#define CAM1_HREF_GPIO 16
+#define CAM_DATA_GPIO 12 // first data pin connection (labelled D2 on OV5640 module)
+#define CAM_PCLK_GPIO 11 // pixel clock
+#define CAM_VSYNC_GPIO 21
+#define CAM_HREF_GPIO 7
 
 typedef struct {
     uint8_t mclk_gpio;

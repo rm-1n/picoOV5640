@@ -117,10 +117,11 @@ const mcu_pin_obj_t *mcu_get_pin_by_number(uint8_t number) {
 }
 
 void claim_pin(const mcu_pin_obj_t *pin) {
-    if (pin->number >= NUM_BANK0_GPIOS)
+    if (pin->number >= NUM_BANK0_GPIOS) {
         printf("Error: asked for pin #%d but has %d pins\n", pin->number, NUM_BANK0_GPIOS);
         return;
-    gpio_bank0_pin_claimed |= (1LL << pin->number);
+    }
+    gpio_bank0_pin_claimed |= (1ULL << pin->number);
 }
 
 void mp_arg_validate_int_range(int i, int min, int max) {
@@ -273,8 +274,14 @@ static pio_pinmask_t _check_pins_free(const mcu_pin_obj_t *first_pin, uint8_t pi
                 printf("Pin count too large\n");
             }
             const mcu_pin_obj_t *pin = mcu_get_pin_by_number(pin_number);
-            if (!pin || (exclusive_pin_use || _pin_reference_count[pin_number] == 0)) {
+            if (!pin) {
                 printf("pin in use\n");
+            } else {
+                // If exclusive_pin_use is requested, and the reference count
+                // shows the pin is already used, report it as in-use.
+                if (exclusive_pin_use && _pin_reference_count[pin_number] != 0) {
+                    printf("pin in use\n");
+                }
             }
             PIO_PINMASK_SET(pins_we_use, pin_number);
         }

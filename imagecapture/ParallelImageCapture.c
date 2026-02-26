@@ -75,7 +75,37 @@ size_t common_hal_imagecapture_parallelimagecapture_singleshot_capture(rp2pio_st
             }
         }
         
+        // Troubleshooting diagnostics
         printf("Image capture failed\n");
+        // Print some header bytes
+        printf("buffer head: ");
+        for (size_t j = 0; j < 16 && j < buff_size; j++) printf("%02x ", buff[j]);
+        printf("\n");
+        // Print some tail bytes
+        printf("buffer tail: ");
+        for (size_t j = (buff_size > 16 ? buff_size - 16 : 0); j < buff_size; j++) printf("%02x ", buff[j]);
+        printf("\n");
+        // Look for JPEG start marker
+        int start_idx = -1;
+        for (size_t i = 0; i + 1 < buff_size; i++) {
+            if ((uint8_t)buff[i] == 0xFF && (uint8_t)buff[i + 1] == 0xD8) {
+                start_idx = i;
+                break;
+            }
+        }
+        if (start_idx >= 0) {
+            printf("Found JPEG SOI at index %d\n", start_idx);
+        } else {
+            printf("JPEG SOI (0xFF 0xD8) not found in buffer\n");
+        }
+        // Basic stats
+        printf("requested buf size: %d, fifo_depth: %u, actual_frequency: %u\n", (int)buff_size, self->fifo_depth, (unsigned)self->actual_frequency);
+        // Check if buffer appears all zeros
+        bool all_zero = true;
+        for (size_t i = 0; i < buff_size; i++) {
+            if (buff[i] != 0) { all_zero = false; break; }
+        }
+        printf("buffer all zero: %s\n", all_zero ? "yes" : "no");
         return 0;
     }
     return buff_size;

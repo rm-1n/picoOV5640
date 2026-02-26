@@ -361,8 +361,13 @@ void set_size_and_colorspace(const camera_settings_t *data, enum OV5640_SIZE_TYP
 }
 
 void power_on(const camera_settings_t *data) {
-    // masterclock - 150 MHz / 7.5 = 20Mhz (MCLK_FREQ)
-    clock_gpio_init(data->mclk_gpio, CLOCKS_CLK_GPOUT0_CTRL_AUXSRC_VALUE_CLK_SYS, 7.5);
+    gpio_set_function(data->mclk_gpio, GPIO_FUNC_PWM);
+    uint slice_num = pwm_gpio_to_slice_num(data->mclk_gpio);
+    pwm_set_wrap(slice_num, 4);
+    // Set channel A output high for one cycle before dropping
+    pwm_set_chan_level(slice_num, pwm_gpio_to_channel(data->mclk_gpio), 2);
+    // Set the PWM running
+    pwm_set_enabled(slice_num, true);
 
     // Initialize reset/powerdown pins, set their direction to output
     gpio_init(data->rst_gpio);

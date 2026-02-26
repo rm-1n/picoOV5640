@@ -7,69 +7,48 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Initialise pico_sdk from installed location
-# (note this can come from environment, CMake cache etc)
-
-# == DO NOT EDIT THE FOLLOWING LINES for the Raspberry Pi Pico VS Code Extension to work ==
-if(WIN32)
-    set(USERHOME $ENV{USERPROFILE})
-else()
-    set(USERHOME $ENV{HOME})
+# If this directory is built standalone, import the Pico SDK. When used as a
+# subdirectory of a top-level Pico project the SDK will already be available,
+# so avoid re-importing an SDK configured for a different version.
+if(NOT TARGET pico_sdk_init)
+    include(pico_sdk_import.cmake)
 endif()
-set(sdkVersion 2.1.1)
-set(toolchainVersion 14_2_Rel1)
-set(picotoolVersion 2.1.1)
-set(picoVscode ${USERHOME}/.pico-sdk/cmake/pico-vscode.cmake)
-if (EXISTS ${picoVscode})
-    include(${picoVscode})
-endif()
-# ====================================================================================
-set(PICO_BOARD pico2_w CACHE STRING "Board type")
 
-# Pull in Raspberry Pi Pico SDK (must be before project)
-include(pico_sdk_import.cmake)
+project(pico_ov5640 C CXX ASM)
 
-project(camera C CXX ASM)
-
-# Initialise the Raspberry Pi Pico SDK
+# initialize the Pico SDK if not already done
 pico_sdk_init()
 
-# Add executable. Default name is the project name, version 0.1
+# Provide an interface library so other projects can link against this camera driver
+add_library(pico_ov5640 INTERFACE)
 
-add_executable(camera camera.c ov5640.c imagecapture/StateMachine.c imagecapture/ParallelImageCapture.c )
-
-if(ENABLE_PSRAM)
-    add_compile_definitions(ENABLE_PSRAM=1)
-    message(STATUS "PSRAM enabled: Using custom linker script (memmap_custom.ld)")
-    pico_set_linker_script(DualShot ${CMAKE_SOURCE_DIR}/memmap_custom.ld) # memory map linker script
-endif()
-
-pico_set_program_name(camera "camera")
-pico_set_program_version(camera "0.1")
-
-# Modify the below lines to enable/disable output over UART/USB
-pico_enable_stdio_uart(camera 1)
-pico_enable_stdio_usb(camera 0)
-
-# Add the standard library to the build
-target_link_libraries(camera
-        pico_stdlib)
-
-# Add the standard include files to the build
-target_include_directories(camera PRIVATE
-        ${CMAKE_CURRENT_LIST_DIR}
+target_sources(pico_ov5640 INTERFACE
+    ${CMAKE_CURRENT_LIST_DIR}/ov5640.c
+    ${CMAKE_CURRENT_LIST_DIR}/imagecapture/StateMachine.c
+    ${CMAKE_CURRENT_LIST_DIR}/imagecapture/ParallelImageCapture.c
 )
 
-# Add any user requested libraries
-target_link_libraries(camera 
-        hardware_i2c
-        hardware_gpio
-        hardware_pwm
-        hardware_pio
-        hardware_dma
-        hardware_clocks
+target_include_directories(pico_ov5640 INTERFACE
+    ${CMAKE_CURRENT_LIST_DIR}
+    ${CMAKE_CURRENT_LIST_DIR}/imagecapture
+)
 
-        )
+target_link_libraries(pico_ov5640 INTERFACE
+    hardware_i2c
+    hardware_gpio
+    hardware_pwm
+    hardware_pio
+    hardware_dma
+    hardware_clocks
+    pico_stdlib
+)
 
-pico_add_extra_outputs(camera)
+# Optionally provide the example executable when this directory is built standalone
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_LIST_DIR)
+    add_executable(camera camera.c)
+    pico_enable_stdio_uart(camera 1)
+    pico_enable_stdio_usb(camera 0)
+    target_link_libraries(camera PRIVATE pico_stdlib pico_ov5640)
+    pico_add_extra_outputs(camera)
+endif()
 
