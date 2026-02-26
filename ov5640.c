@@ -363,9 +363,10 @@ void set_size_and_colorspace(const camera_settings_t *data, enum OV5640_SIZE_TYP
 void power_on(const camera_settings_t *data) {
     gpio_set_function(data->mclk_gpio, GPIO_FUNC_PWM);
     uint slice_num = pwm_gpio_to_slice_num(data->mclk_gpio);
-    pwm_set_wrap(slice_num, 4);
+    // set to system clock / 4, which should be 25 MHz
+    pwm_set_wrap(slice_num, 3);
     // Set channel A output high for one cycle before dropping
-    pwm_set_chan_level(slice_num, pwm_gpio_to_channel(data->mclk_gpio), 2);
+    pwm_set_chan_level(slice_num, pwm_gpio_to_channel(data->mclk_gpio), 1);
     // Set the PWM running
     pwm_set_enabled(slice_num, true);
 
