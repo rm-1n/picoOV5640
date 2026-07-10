@@ -1,5 +1,8 @@
 #include <stdio.h>
+#include <string.h>
+#include <stdint.h>
 #include "hardware/pio.h"
+#include "hardware/dma.h"
 #include "ov5640.h"
 #include "imagecapture/StateMachine.h"
 
@@ -109,4 +112,72 @@ size_t common_hal_imagecapture_parallelimagecapture_singleshot_capture(rp2pio_st
         return 0;
     }
     return buff_size;
+}
+
+// ── Continuous (streaming) capture ──────────────────────────────────────────
+// The PIO free-runs the sensor into a power-of-two ring buffer via a perpetual,
+// write-address-wrapping DMA, so frames arrive at the sensor's native rate
+// independent of when the host asks. `continuous_latest` extracts the newest
+// complete JPEG (scanning back from the DMA write head for EOI then SOI). This
+// decouples capture latency from the per-request protocol, unlike singleshot.
+static int s_chan = -1;
+static uint8_t *s_ring = NULL;
+static size_t s_mask = 0;   // ring_size - 1 (ring size is a power of two)
+
+void common_hal_imagecapture_parallelimagecapture_continuous_start(
+    rp2pio_statemachine_obj_t *self, uint8_t *ring, uint32_t ring_size_bits) {
+    PIO pio = self->pio;
+    uint sm = self->state_machine;
+    s_ring = ring;
+    s_mask = ((size_t)1 << ring_size_bits) - 1;
+
+    uint8_t offset = rp2pio_statemachine_program_offset(self);
+    pio_sm_set_enabled(pio, sm, false);
+    pio_sm_clear_fifos(pio, sm);
+    pio_sm_restart(pio, sm);
+    pio_sm_exec(pio, sm, pio_encode_jmp(offset));   // align to the next VSYNC once
+
+    if (s_chan < 0) s_chan = dma_claim_unused_channel(true);
+    dma_channel_config c = dma_channel_get_default_config(s_chan);
+    channel_config_set_transfer_data_size(&c, DMA_SIZE_32);
+    channel_config_set_dreq(&c, self->rx_dreq);
+    channel_config_set_read_increment(&c, false);
+    channel_config_set_write_increment(&c, true);
+    channel_config_set_ring(&c, true, ring_size_bits);   // wrap the WRITE address
+    const volatile void *rxf = (const volatile void *)&pio->rxf[sm];
+    dma_channel_configure(s_chan, &c, ring, rxf, 0xFFFFFFFFu, true);   // perpetual
+    pio_sm_set_enabled(pio, sm, true);
+}
+
+size_t common_hal_imagecapture_parallelimagecapture_continuous_latest(uint8_t *out, size_t out_max) {
+    if (s_chan < 0 || !s_ring) return 0;
+    const size_t size = s_mask + 1;
+    // Current DMA write position in the ring; stay a margin behind the head.
+    uint32_t waddr = dma_hw->ch[s_chan].write_addr;
+    size_t head = ((size_t)(waddr - (uint32_t)(uintptr_t)s_ring)) & s_mask;
+    size_t end = (head + size - 128) & s_mask;      // safe read boundary
+    size_t look = 40 * 1024; if (look > size) look = size;
+
+    size_t eoi = SIZE_MAX;
+    for (size_t k = 0; k < look; k++) {
+        size_t p = (end + size - k) & s_mask;
+        if (s_ring[p] == 0xD9 && s_ring[(p + size - 1) & s_mask] == 0xFF) { eoi = p; break; }
+    }
+    if (eoi == SIZE_MAX) return 0;
+    size_t soi = SIZE_MAX;
+    for (size_t k = 2; k < look; k++) {
+        size_t p = (eoi + size - k) & s_mask;
+        if (s_ring[p] == 0xFF && s_ring[(p + 1) & s_mask] == 0xD8) { soi = p; break; }
+    }
+    if (soi == SIZE_MAX) return 0;
+    size_t len = (eoi + 1 + size - soi) & s_mask;
+    if (len == 0 || len > out_max) return 0;
+    for (size_t k = 0; k < len; k++) out[k] = s_ring[(soi + k) & s_mask];
+    return len;
+}
+
+void common_hal_imagecapture_parallelimagecapture_continuous_stop(rp2pio_statemachine_obj_t *self) {
+    if (s_chan >= 0) { dma_channel_abort(s_chan); dma_channel_unclaim(s_chan); s_chan = -1; }
+    s_ring = NULL;
+    pio_sm_set_enabled(self->pio, self->state_machine, false);
 }

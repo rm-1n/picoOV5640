@@ -342,7 +342,7 @@ bool transfer_in(rp2pio_statemachine_obj_t *self,
 
         dma_start_channel_mask(channel_mask);
         while (dma_channel_is_busy(chan_rx)) {
-            sleep_ms(10);
+            sleep_us(100);   // finer poll → less wasted time after the DMA completes
         }
         // Clear the stall bit so we can detect when the state machine is done transmitting.
         self->pio->fdebug = stall_mask;
