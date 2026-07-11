@@ -131,6 +131,14 @@ void common_hal_imagecapture_parallelimagecapture_continuous_start(
     s_ring = ring;
     s_mask = ((size_t)1 << ring_size_bits) - 1;
 
+    // Clear the ring before the perpetual writer starts. Otherwise it still holds
+    // the previous stream session's bytes (or, after a RES switch, a differently
+    // sized frame), and `continuous_latest` can lock onto a stale SOI/EOI pair and
+    // hand back an old/torn frame on the first reads after STREAM 1 — the "corrupt
+    // right after calibration" case. Zeroed bytes contain no JPEG markers, so no
+    // frame is returned until a fresh one has actually been written.
+    memset(ring, 0, s_mask + 1);
+
     uint8_t offset = rp2pio_statemachine_program_offset(self);
     pio_sm_set_enabled(pio, sm, false);
     pio_sm_clear_fifos(pio, sm);
@@ -152,27 +160,52 @@ void common_hal_imagecapture_parallelimagecapture_continuous_start(
 size_t common_hal_imagecapture_parallelimagecapture_continuous_latest(uint8_t *out, size_t out_max) {
     if (s_chan < 0 || !s_ring) return 0;
     const size_t size = s_mask + 1;
-    // Current DMA write position in the ring; stay a margin behind the head.
-    uint32_t waddr = dma_hw->ch[s_chan].write_addr;
-    size_t head = ((size_t)(waddr - (uint32_t)(uintptr_t)s_ring)) & s_mask;
-    size_t end = (head + size - 128) & s_mask;      // safe read boundary
-    size_t look = 40 * 1024; if (look > size) look = size;
+    // Keep this many bytes of clearance between the frame we return and the live
+    // write head, to absorb the writes that land while we scan + copy.
+    const size_t MARGIN = 2048;
+
+    // Newest complete frame: scan back from the DMA write head for EOI, then SOI.
+    // (JPEG byte-stuffing escapes every 0xFF in entropy data as 0xFF00, so a real
+    // FF D9 / FF D8 never appears mid-scan — the first ones found are the true
+    // frame boundaries. The ring was zeroed at STREAM start, so no stale markers.)
+    uint32_t waddr0 = dma_hw->ch[s_chan].write_addr;
+    size_t head0 = ((size_t)(waddr0 - (uint32_t)(uintptr_t)s_ring)) & s_mask;
 
     size_t eoi = SIZE_MAX;
-    for (size_t k = 0; k < look; k++) {
-        size_t p = (end + size - k) & s_mask;
+    for (size_t k = 2; k < size; k++) {
+        size_t p = (head0 + size - k) & s_mask;
         if (s_ring[p] == 0xD9 && s_ring[(p + size - 1) & s_mask] == 0xFF) { eoi = p; break; }
     }
     if (eoi == SIZE_MAX) return 0;
     size_t soi = SIZE_MAX;
-    for (size_t k = 2; k < look; k++) {
+    for (size_t k = 2; k < size; k++) {
         size_t p = (eoi + size - k) & s_mask;
         if (s_ring[p] == 0xFF && s_ring[(p + 1) & s_mask] == 0xD8) { soi = p; break; }
     }
     if (soi == SIZE_MAX) return 0;
+
     size_t len = (eoi + 1 + size - soi) & s_mask;
-    if (len == 0 || len > out_max) return 0;
+    if (len == 0 || len >= size || len > out_max) return 0;
+
+    // Tear guard. The perpetual writer overwrites this frame's SOI once it advances
+    // `size - len` bytes past the frame's EOI (a full lap of the ring back to SOI).
+    // The 32 KiB ring barely holds one VGA JPEG, so that runway is small and the
+    // free-running DMA laps into the frame we're copying → the classic half-gray /
+    // tinted torn frame. Only hand the frame back while the write head is still
+    // inside the runway (with MARGIN to spare) BEFORE and AFTER the copy; otherwise
+    // bail and let the host's CAP retry loop try again a moment later. A torn frame
+    // is thus dropped, never displayed — at the cost of an occasional retry.
+    size_t runway = size - len;                    // bytes after EOI before SOI is hit
+    size_t d0 = (head0 + size - eoi) & s_mask;     // bytes written since this EOI
+    if (d0 + MARGIN >= runway) return 0;
+
     for (size_t k = 0; k < len; k++) out[k] = s_ring[(soi + k) & s_mask];
+
+    uint32_t waddr1 = dma_hw->ch[s_chan].write_addr;
+    size_t head1 = ((size_t)(waddr1 - (uint32_t)(uintptr_t)s_ring)) & s_mask;
+    size_t d1 = (head1 + size - eoi) & s_mask;     // advance during the copy
+    if (d1 < d0 || d1 + MARGIN >= runway) return 0;  // wrapped, or lapped into the frame
+
     return len;
 }
 
